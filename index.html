@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#050507">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23050507'/%3E%3Cpath d='M32 14c-3 0-5 3-4 6 2 2 6 2 8 0 1-3-1-6-4-6z' fill='%23ead6bd'/%3E%3Cpath d='M28 22c-10 4-15 14-13 24 1 5 8 8 17 8s16-3 17-8c2-10-3-20-13-24-2 2-6 2-8 0z' fill='%23ead6bd'/%3E%3C/svg%3E">
 <title>Trash Bag Simulator</title>
 <style>
 :root{
@@ -82,6 +83,8 @@ body.hud-off #hud,body.hud-off #todBtn,body.hud-off #flags{opacity:0!important;p
 #caption.show>div{opacity:1;transform:none;filter:blur(0)}
 #caption.show .cap-title{transition-delay:.12s}
 #caption.show .cap-sub{transition-delay:.3s}
+#caption.locked .cap-title{animation:capLock .6s cubic-bezier(.2,.8,.2,1)}
+@keyframes capLock{0%{letter-spacing:.06em;opacity:.6}100%{letter-spacing:0;opacity:1}}
 .cap-kicker{font-size:10.5px;letter-spacing:.4em;text-transform:uppercase;color:var(--dim);text-shadow:0 1px 16px rgba(0,0,0,.7)}
 .cap-title{font-family:var(--serif);font-style:italic;font-size:clamp(30px,3.9vw,50px);line-height:1.05;margin-top:12px;text-shadow:0 2px 34px rgba(0,0,0,.6)}
 .cap-sub{font-size:14px;color:var(--dim);margin-top:12px;letter-spacing:.01em;text-shadow:0 1px 16px rgba(0,0,0,.7)}
@@ -2904,27 +2907,39 @@ function makeCity(cx, cz, w, d, rng) {
   const U = { uLit: { value: 1 } };
   patchMaterial(mat, 'cityWin', (sh) => {
     Object.assign(sh.uniforms, U);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP; varying vec3 vWN; varying float vBid;')
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vLP; varying vec3 vSz; varying vec3 vN0; varying float vBid;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vec4 wp4 = vec4(transformed, 1.0);
-        vBid = 0.0;
+        vLP = position; vN0 = normal; vSz = vec3(1.0); vBid = 0.5;
         #ifdef USE_INSTANCING
-          wp4 = instanceMatrix * wp4;
-          vBid = instanceMatrix[3].x * 0.137 + instanceMatrix[3].z * 0.311;
-        #endif
-        wp4 = modelMatrix * wp4; vWP = wp4.xyz; vWN = normal;`);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uLit; varying vec3 vWP; varying vec3 vWN; varying float vBid;')
+          vSz = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+          vBid = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453);
+        #endif`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uLit; varying vec3 vLP; varying vec3 vSz; varying vec3 vN0; varying float vBid;')
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nvec3 cityEm = vec3(0.0); float cwin = 0.0;')
       .replace('#include <color_fragment>', `#include <color_fragment>
-        float isRoof = step(0.5, vWN.y);
-        vec2 fc = abs(vWN.x) > 0.5 ? vec2(vWP.z, vWP.y) : vec2(vWP.x, vWP.y);
-        vec2 cs = vec2(3.1, 3.4);
-        vec2 cell = floor(fc / cs); vec2 f = fract(fc / cs);
-        cwin = step(0.2, f.x) * step(f.x, 0.8) * step(0.28, f.y) * step(f.y, 0.82) * (1.0 - isRoof) * step(3.0, vWP.y);
-        float h = fract(sin(dot(cell + vec2(vBid, vBid * 1.7), vec2(12.9898, 78.233))) * 43758.5453);
-        float lit = step(0.5, h) * cwin;
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.035, 0.045), cwin * 0.9);
-        cityEm = lit * mix(vec3(1.0, 0.68, 0.36), vec3(0.7, 0.82, 1.0), step(0.88, h)) * (0.35 + 0.9 * fract(h * 13.1)) * uLit;`)
+        // windows laid out per building facade: whole columns, whole floors, no cut-off panes
+        float isRoof = step(0.5, abs(vN0.y));
+        bool xFace = abs(vN0.x) > 0.5;
+        float facadeW = xFace ? vSz.z : vSz.x;
+        vec2 fs = vec2((xFace ? vLP.z : vLP.x) * facadeW, vLP.y * vSz.y - 1.0);
+        float cols = max(1.0, floor(facadeW / (2.7 + vBid * 1.3)));
+        float fh = 3.1 + fract(vBid * 7.0) * 0.6;
+        float floors = max(0.0, floor((vSz.y - 1.0 - 4.0) / fh));
+        vec2 cc = vec2(fs.x / (facadeW / cols), (fs.y - 2.4) / fh);
+        vec2 cell = floor(cc), f = fract(cc), fw = max(fwidth(cc), vec2(1e-4));
+        float mx = 0.16 + fract(vBid * 3.0) * 0.1, my = 0.24;
+        float wx = smoothstep(mx - fw.x, mx + fw.x, f.x) * (1.0 - smoothstep(1.0 - mx - fw.x, 1.0 - mx + fw.x, f.x));
+        float wy = smoothstep(my - fw.y, my + fw.y, f.y) * (1.0 - smoothstep(0.86 - fw.y, 0.86 + fw.y, f.y));
+        float band = step(0.0, cc.y) * step(cc.y, floors) * (1.0 - isRoof);
+        float far = smoothstep(0.35, 0.8, max(fw.x, fw.y));
+        cwin = mix(wx * wy, 0.42, far) * band;
+        float h = fract(sin(dot(cell + vec2(vBid * 91.7, vBid * 37.3), vec2(12.9898, 78.233))) * 43758.5453);
+        float litP = 0.25 + vBid * 0.5;
+        float lit = mix(step(1.0 - litP, h), litP, far);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.025, 0.03, 0.04), cwin * 0.92);
+        diffuseColor.rgb *= 1.0 - isRoof * 0.25;
+        vec3 tint = mix(mix(vec3(1.0, 0.66, 0.34), vec3(0.72, 0.84, 1.0), step(0.82, fract(h * 7.31 + vBid))), vec3(0.95, 0.72, 0.46), far);
+        cityEm = cwin * lit * tint * mix(0.45 + 0.7 * fract(h * 13.1), 0.8, far) * uLit;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.15, cwin);')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance += cityEm * 4.0;');
   });
@@ -3094,12 +3109,28 @@ class Physics {
         }
       }
       if (maxPen > 0) b.pos.addScaledVector(_pn, maxPen * 0.9);
+      let tipped = false;
+      if (b.item.upright) {
+        // weeble: a rubber duck rights itself (flip-over torque when upside down)
+        const up = _p1.set(0, 1, 0).applyQuaternion(b.quat), ax = _p2.crossVectors(up, UP);
+        if (ax.lengthSq() < 1e-4 && up.y < 0) ax.set(1, 0, 0);
+        tipped = up.y < 0.93;
+        b.w.addScaledVector(ax.normalize(), (tipped ? 55 : 20) * h * (1.2 - up.y)); b.w.multiplyScalar(Math.exp(-2.5 * h));
+        if (tipped && contact) b.vel.y = Math.max(b.vel.y, 0.25 * (1 - up.y));
+      }
       if (contact) {
         b.w.multiplyScalar(0.985);
         if (impact > 0.6 && this.time - b.lastImpact > 0.12 && this.onImpact) { b.lastImpact = this.time; this.onImpact(b, impact); }
-        if (b.vel.lengthSq() < 0.004 && b.w.lengthSq() < 0.05) { b.sleep += h; if (b.sleep > 0.5) { b.asleep = true; b.vel.set(0, 0, 0); b.w.set(0, 0, 0); } }
-        else b.sleep = 0;
-      }
+        const v2 = b.vel.lengthSq(), w2 = b.w.lengthSq();
+        b.contactTime = (b.contactTime || 0) + h;
+        if (v2 < 0.03 && w2 < 0.8 && !tipped) {
+          // resting: bleed off the residual jitter that otherwise makes objects crawl
+          b.vel.multiplyScalar(Math.exp(-6 * h)); b.w.multiplyScalar(Math.exp(-6 * h));
+          b.sleep += h;
+          if (b.sleep > 0.35) { b.asleep = true; b.vel.set(0, 0, 0); b.w.set(0, 0, 0); }
+        } else b.sleep = 0;
+        if (b.contactTime > 6 && !tipped) { b.asleep = true; b.vel.set(0, 0, 0); b.w.set(0, 0, 0); }
+      } else b.contactTime = 0;
     }
     // soft separation between items
     for (let i = 0; i < B.length; i++) {
@@ -3161,23 +3192,41 @@ class CameraRig {
       if (o.snap) { this.yaw = this.yawT; this.pitch = this.pitchT; }
     }
     if (o.snapTarget !== false) this.target.copy(o.target()).add(this.targetOff);
-    this.zoomT = clamp(this.zoomT, 0.5, 1.6);
+    if (o.keepAngles !== true) this.look.pitchT = 0;
+    this.look.yawT = 0;
+    this.targetLambda = o.targetLambda || 6;
+    this.zoomT = clamp(this.zoomT, 0.6, 1.6);
     this.startBlend(blend, arc);
   }
-  setPOV(o, blend = 0) { this.mode = 'pov'; this.povPos = o.pos; this.povQuat = o.quat; this.povYaw = o.yaw || 0; this.povPitch = o.pitch || 0; this.fovBase = o.fov || 70; this.look.yawT = this.look.pitchT = 0; this.zoomT = 1; this.startBlend(blend); }
-  setChase(o, blend = 0) { this.mode = 'chase'; this.chase = o; this.fovBase = o.fov || 55; this.look.yawT = this.look.pitchT = 0; this.chaseInit = false; this.startBlend(blend); }
+  setPOV(o, blend = 0) { this.mode = 'pov'; this.povPos = o.pos; this.povQuat = o.quat; this.povYaw = o.yaw || 0; this.povPitch = o.pitch || 0; this.fovBase = o.fov || 70; this.look.yawT = this.look.pitchT = 0; this.zoom = this.zoomT = 1; this.startBlend(blend); }
+  setChase(o, blend = 0) { this.mode = 'chase'; this.chase = o; this.fovBase = o.fov || 55; this.look.yawT = this.look.pitchT = 0; this.zoomT = clamp(this.zoomT, 0.7, 1.6); this.chaseInit = false; this.startBlend(blend); }
   drag(dx, dy) {
     this.idle = 0;
-    if (this.mode === 'orbit') { this.yawT -= dx * 0.0052; this.pitchT = clamp(this.pitchT + dy * 0.0042, -0.12, 1.35); }
-    else {
-      const k = this.mode === 'pov' ? 0.0038 : 0.003;
-      this.look.yawT += dx * k; this.look.pitchT += dy * k;
-      const ly = this.mode === 'pov' ? 3.2 : this.mode === 'chase' ? 3.14 : 0.45, lp = this.mode === 'pov' ? 1.25 : this.mode === 'chase' ? 0.7 : 0.3;
-      if (this.mode !== 'pov' && this.mode !== 'chase') this.look.yawT = clamp(this.look.yawT, -ly, ly);
-      this.look.pitchT = clamp(this.look.pitchT, -lp, lp);
+    if (this.mode === 'orbit') {
+      this.yawT -= dx * 0.0052;
+      // below the lowest orbit angle the camera tilts up instead, so the sky is always reachable
+      const MIN = -0.12, step = dy * 0.0042;
+      let p = this.pitchT + step;
+      if (step > 0 && this.look.pitchT > 0) { const take = Math.min(this.look.pitchT, step); this.look.pitchT -= take; p = this.pitchT + (step - take); }
+      if (p < MIN) { this.look.pitchT = clamp(this.look.pitchT + (MIN - p), 0, 1.15); p = MIN; }
+      this.pitchT = clamp(p, MIN, 1.35);
+    } else if (this.mode === 'pov') {
+      this.look.yawT += dx * 0.0038;
+      this.look.pitchT = clamp(this.look.pitchT + dy * 0.0038, -1.35 - this.povPitch, 1.45 - this.povPitch);
+    } else if (this.mode === 'chase') {
+      this.look.yawT += dx * 0.003;
+      this.look.pitchT = clamp(this.look.pitchT + dy * 0.003, -0.5, 0.7);
+    } else {
+      this.look.yawT = clamp(this.look.yawT + dx * 0.003, -0.45, 0.45);
+      this.look.pitchT = clamp(this.look.pitchT + dy * 0.003, -0.3, 0.3);
     }
   }
-  wheel(dy) { this.idle = 0; this.zoomT = clamp(this.zoomT * Math.exp(dy * 0.0011), 0.35, 2.6); }
+  wheel(dy) {
+    this.idle = 0;
+    if (this.mode === 'script') return;
+    const lo = this.mode === 'pov' ? 0.75 : this.mode === 'chase' ? 0.7 : 0.35, hi = this.mode === 'pov' ? 2.2 : this.mode === 'chase' ? 1.8 : 2.6;
+    this.zoomT = clamp(this.zoomT * Math.exp(dy * 0.0011), lo, hi);
+  }
   shake(a) { this.shakeAmt = Math.max(this.shakeAmt, a); }
   lookAtQuat(from, to, out) { this._m.lookAt(from, to, UP); return out.setFromRotationMatrix(this._m); }
   update(dt) {
@@ -3192,12 +3241,21 @@ class CameraRig {
     if (this.mode === 'orbit') {
       if (!this.dragging && this.idle > 9) this.yawT += this.driftSpeed * dt;
       const t = this.targetFn();
-      this.target.lerp(_v1.copy(t).add(this.targetOff), 1 - Math.exp(-6 * dt));
+      _v1.copy(t).add(this.targetOff);
+      const kx = 1 - Math.exp(-6 * dt), ky = 1 - Math.exp(-(this.targetLambda || 6) * dt);
+      this.target.x = lerp(this.target.x, _v1.x, kx); this.target.z = lerp(this.target.z, _v1.z, kx); this.target.y = lerp(this.target.y, _v1.y, ky);
       const d = clamp(this.dist * this.zoom, this.minDist, this.maxDist);
       const cp = Math.cos(this.pitch);
       P.set(this.target.x + Math.sin(this.yaw) * cp * d, this.target.y + Math.sin(this.pitch) * d, this.target.z + Math.cos(this.yaw) * cp * d);
-      if (this.ground) { const g = this.ground(P.x, P.z) + Math.max(0.03, d * 0.06); if (P.y < g) P.y = g; }
+      if (this.ground) {
+        // smoothed floor: rises quickly, sinks slowly, so waves never shake the camera
+        const g = this.ground(P.x, P.z) + Math.max(0.03, d * 0.06);
+        if (this.gFloor == null || Math.abs(this.gFloor - g) > 3) this.gFloor = g;
+        this.gFloor = damp(this.gFloor, g, g > this.gFloor ? 14 : 1.5, dt);
+        if (P.y < this.gFloor) P.y = this.gFloor;
+      }
       this.lookAtQuat(P, this.target, Q);
+      if (this.look.pitch > 0.0005) Q.multiply(this._q2.setFromAxisAngle(_v2.set(1, 0, 0), this.look.pitch));
       near = clamp(d * 0.04, 0.008, 0.5);
       this.focusPoint.copy(this.target);
     } else if (this.mode === 'pov') {
@@ -3205,7 +3263,7 @@ class CameraRig {
       this._q.copy(this.povQuat());
       this._e.set(clamp(this.povPitch + this.look.pitch, -1.35, 1.45), this.povYaw + this.look.yaw, 0, 'YXZ');
       Q.copy(this._q).multiply(this._q2.setFromEuler(this._e));
-      fov = this.fovBase / this.zoom;
+      fov = clamp(this.fovBase / this.zoom, 32, 96);
       near = 0.03;
       this.focusPoint.copy(P);
     } else if (this.mode === 'chase') {
@@ -3230,7 +3288,6 @@ class CameraRig {
       this._e.set(this.look.pitch, this.look.yaw, 0, 'YXZ');
       Q.copy(this._q).multiply(this._q2.setFromEuler(this._e));
       if (s.fov) fov = s.fov;
-      fov /= Math.sqrt(this.zoom);
       near = s.near || 0.05;
       this.focusPoint.copy(s.focus || s.look);
     }
@@ -4006,7 +4063,7 @@ function buildFinal(plan) {
 
   if (kind === 'sea') {
     const water = makeWater(W, 'sea', plan.waves, rand(0, TAU)); S.add(water.mesh); W.water = water;
-    W.ground = (x, z) => water.height(x, z) + 0.2;
+    W.ground = (x, z) => water.height(x, z) + 0.26;
     W.groundNormal = (x, z, o) => water.normal(x, z, o);
     W.updaters.push((dt) => water.update(dt));
     const ship = makeShip(); const sa = rand(0, TAU), sd = rand(700, 1100);
@@ -4314,7 +4371,26 @@ const UI = {
     this.el.tLabel.textContent = label || 'next event';
     this.el.tBar.style.width = (100 * (1 - clamp(sec / total, 0, 1))).toFixed(2) + '%';
   },
+  rollCaption(names, kicker, finalName, sub) {
+    clearInterval(this.rollTimer); clearTimeout(this.capTimer);
+    const cap = this.el.cap;
+    cap.classList.remove('locked');
+    this.capK.textContent = 'fate is deciding'; this.capS.textContent = ' ';
+    cap.classList.add('show');
+    const t0 = performance.now();
+    this.rollTimer = setInterval(() => {
+      if (performance.now() - t0 > 1150) {
+        clearInterval(this.rollTimer);
+        this.capK.textContent = kicker; this.capT.textContent = finalName; this.capS.textContent = sub;
+        cap.classList.add('locked');
+        this.capTimer = setTimeout(() => cap.classList.remove('show', 'locked'), 6000);
+        return;
+      }
+      this.capT.textContent = names[Math.floor(Math.random() * names.length)];
+    }, 70);
+  },
   caption(kicker, title, sub, dur = 5.5) {
+    clearInterval(this.rollTimer); this.el.cap.classList.remove('locked');
     const show = () => {
       this.capK.textContent = kicker; this.capT.textContent = title; this.capS.textContent = sub || '';
       this.el.cap.classList.add('show');
@@ -4324,7 +4400,7 @@ const UI = {
     if (this.el.cap.classList.contains('show')) { this.el.cap.classList.remove('show'); clearTimeout(this.capTimer); this.capTimer = setTimeout(show, 900); }
     else show();
   },
-  clearCaption() { clearTimeout(this.capTimer); this.el.cap.classList.remove('show'); },
+  clearCaption() { clearTimeout(this.capTimer); clearInterval(this.rollTimer); this.el.cap.classList.remove('show', 'locked'); },
   letterbox(on) { document.body.classList.toggle('letterbox', on); },
   showTod(on) { this.el.tod.classList.toggle('show', on); },
   setTod(name) { this.el.todLabel.textContent = name; },
@@ -4403,7 +4479,9 @@ const Game = {
     this.hero.current = item;
     const f = item.focus || item.radius || 0.1;
     const d = prev ? prev.obj.getWorldPosition(_v1).distanceTo(item.obj.getWorldPosition(_v2)) : 0;
-    Engine.rig.setOrbit({ target: () => item.obj.getWorldPosition(item._wp || (item._wp = V3())), offset: V3(0, f * 0.25, 0), dist: Math.max(0.13, f * 3.2), minDist: Math.max(0.06, f * 1.1), maxDist: Math.max(1.2, f * 16), pitch: rand(0.18, 0.4), fov: 42 }, blend, clamp(d * 0.25, 0.03, 1.2));
+    const sea = this.world && this.world.kind === 'sea';
+    // at sea the target rides the swell slowly and the camera keeps a little distance so it stays above the waves
+    Engine.rig.setOrbit({ target: () => item.obj.getWorldPosition(item._wp || (item._wp = V3())), offset: V3(0, f * 0.25, 0), dist: Math.max(sea ? 0.45 : 0.13, f * (sea ? 5 : 3.2)), minDist: Math.max(sea ? 0.3 : 0.06, f * 1.1), maxDist: Math.max(1.2, f * 16), pitch: sea ? rand(0.3, 0.45) : rand(0.18, 0.4), fov: 42, targetLambda: sea ? 2.2 : 6 }, blend, clamp(d * 0.25, 0.03, 1.2));
     if (!silent) {
       UI.caption('you are now', item.info.name, pick(item.info.lines), 5.5);
       if (AudioSys.on) AudioSys.chime();
@@ -4652,7 +4730,7 @@ Game.states = {
   spilled: {
     enter(arg) {
       const W = Game.world, bag = W.bag, U = bag.userData.U;
-      this.t = 0; this.gullPhase = 'none'; this.gullT = 300; this.switchT = rand(15, 40);
+      this.t = 0; this.gullPhase = 'none'; this.gullT = 300; this.rolled = false;
       UI.setStage('III', 'Spilled'); UI.letterbox(false);
       AudioSys.setProfile({ beds: { wind: 0.42, machinery: 0.28, city: 0.07, flies: 0.4 }, events: { gulls: 0.06, crows: 0.03 }, music: 0.58 });
       let tdw = arg && arg.tearDir;
@@ -4706,16 +4784,27 @@ Game.states = {
         } else animateCat(cat, dt, 0);
       }
       if (this.gullPhase === 'none') {
-        this.gullT -= gdt; this.switchT -= gdt;
+        this.gullT -= gdt;
         UI.setTimer(this.gullT, 300, 'a gull');
-        if (this.switchT <= 0 && this.t > 4) {
-          this.switchT = rand(15, 40);
-          if (Math.random() < 0.8) { const pool = W.items.concat([this.bagIt]).filter(i => i !== Game.hero.current); Game.setCurrent(pick(pool)); }
-        }
+        if (!this.rolled && this.t > 3.4) this.rollFate(false);
         if (this.gullT <= 0 && this.t > 5) this.startGull();
       } else this.updateGull(dt);
     },
+    /* One random roll decides what you are from now on. No re-rolls: you stay locked to it. */
+    rollFate(instant) {
+      if (this.rolled) return;
+      this.rolled = true;
+      const pool = [this.bagIt].concat(Game.world.items.filter(i => i.obj.visible));
+      const fate = pool[Math.floor(Math.random() * pool.length)];
+      Game.hero.locked = true;
+      if (instant) { Game.hero.current = fate; return; }
+      const stay = fate === this.bagIt;
+      if (!stay) Game.setCurrent(fate, 2.6, true);
+      UI.rollCaption(pool.map(i => i.info.name), stay ? 'you are still' : 'fate has decided · you are now', fate.info.name, stay ? 'Still you. Locked in.' : pick(fate.info.lines));
+      if (AudioSys.on) { for (let k = 0; k < 6; k++) setTimeout(() => AudioSys.on && AudioSys.clink(rand(-0.3, 0.3), 0.05, false), k * 170); setTimeout(() => AudioSys.on && AudioSys.chime(), 1150); }
+    },
     startGull() {
+      if (!this.rolled) this.rollFate(true);
       const W = Game.world, g = W.gull, it = Game.hero.current, cam = Engine.camera;
       this.gullPhase = 'approach'; this.gt = 0;
       const P = it.obj.getWorldPosition(V3());
@@ -4780,6 +4869,7 @@ Game.states = {
       }
     },
     skip() {
+      if (!this.rolled) this.rollFate(true);
       const W = Game.world, g = W.gull, it = Game.hero.current;
       if (it.body) { it.body.enabled = false; W.physics.remove(it.body); it.body = null; }
       const P = it.obj.getWorldPosition(V3());
@@ -4846,7 +4936,7 @@ Game.states = {
   peace: {
     enter() {
       const W = Game.world, g = Game.hero.gull, it = Game.hero.current, kind = W.kind;
-      this.t = 0; this.phase = 'carry'; this.pt = 0; this.credited = false; this.switchT = rand(15, 40); this.gullAway = false;
+      this.t = 0; this.phase = 'carry'; this.pt = 0; this.credited = false; this.gullAway = false;
       UI.setStage('V', 'Peace'); UI.setTimer(null, 'forever'); UI.letterbox(true); UI.clearCaption();
       const beds = kind === 'sea' ? { waves: 0.75, wind: 0.3 } : kind === 'desert' ? { wind: 0.55, sand: 0.45, crickets: 0 } : { surf: 0.6, wind: 0.25, palms: 0.3 };
       AudioSys.setProfile({ beds, events: kind === 'desert' ? {} : kind === 'sea' ? { gulls: 0.04, ship: 0.008 } : { gulls: 0.05 }, music: 0.9, fade: 3 });
@@ -4907,11 +4997,6 @@ Game.states = {
         if (this.t - this.restT > 22 && !this.credited) {
           this.credited = true;
           UI.credits([['Trash Bag Simulator', ''], ['a bag, and everything in it', 'starring'], ['a cat, a gull, and the wind', 'with'], ['nothing but code and a little patience', 'made from'], ['Thank you for letting go.', '']]);
-        }
-        this.switchT -= gdt;
-        if (this.switchT <= 0) {
-          this.switchT = rand(15, 40);
-          if (Math.random() < 0.8 && W.items.length > 1) Game.setCurrent(pick(W.items.filter(i => i !== Game.hero.current)));
         }
       }
       if (this.puff) this.puff.update(dt);
@@ -4995,7 +5080,15 @@ function bindKeys() {
     AudioSys.resume();
     if (k === 'n') { if (Game.stateName === 'title') startGame(); else Game.skip(); }
     else if (k === 't') { Game.timeScale = Game.timeScale > 1 ? 1 : 10; UI.flags(); UI.toast(Game.timeScale > 1 ? 'Timers ×10' : 'Timers ×1'); }
-    else if (k === '1' || k === '2' || k === '3') { Game.forcedLoc = ['sea', 'desert', 'beach'][+k - 1]; UI.flags(); UI.toast('Next location · ' + LOC_NAMES[Game.forcedLoc]); }
+    else if (k === '1' || k === '2' || k === '3') {
+      const loc = ['sea', 'desert', 'beach'][+k - 1];
+      if (Game.stateName === 'flight' && !Game.lock) {
+        // the destination is not built until the flight ends, so it can still change
+        Game.plan = planFinal(loc); Game.forcedLoc = null;
+        try { localStorage.setItem('tbs_lastLoc', loc); } catch (err) { /* storage unavailable */ }
+        UI.flags(); UI.toast('Location · ' + LOC_NAMES[loc]);
+      } else { Game.forcedLoc = loc; UI.flags(); UI.toast('Next location · ' + LOC_NAMES[loc]); }
+    }
     else if (k === 'f') toggleFullscreen();
     else if (k === 'h') document.body.classList.toggle('hud-off');
     else if (k === 'c') cycleTod();
