@@ -4239,7 +4239,8 @@ function buildFinal(plan) {
         o.a += o.sp * dt;
         const x = o.c.x + Math.cos(o.a) * o.r, z = o.c.z + Math.sin(o.a) * o.r, y = o.h + Math.sin(t * 0.4 + o.r) * 2;
         o.g.group.position.set(x, y, z);
-        o.g.group.rotation.set(0, -o.a + (o.sp > 0 ? Math.PI : 0), (o.sp > 0 ? -1 : 1) * 0.35);
+        // face along the circle's tangent (model forward is +z) and bank into the turn
+        o.g.group.rotation.set(0, -o.a + (o.sp > 0 ? 0 : Math.PI), (o.sp > 0 ? 1 : -1) * 0.35);
         o.g.pose.flap = Math.sin(t * 0.35 + o.r) > 0.6 ? 1 : 0.05;
         animateGull(o.g, dt, 0.9);
       }
